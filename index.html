@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sancor Invaders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+<style>
+  /* Layout: one arcade screen centered on black, touch pad under it on phones. Single dark look on purpose. */
+  :root {
+    --bg: #000000;
+    --screen: #04040a;
+    --drone: #ffd9cf;
+    --ufo: #ff3b3b;
+    --cannon: #3cff5a;
+    --dim: #8a8392;
+    --pad: #15141c;
+    --pad-edge: #2b2836;
+    --font-arcade: "Press Start 2P", ui-monospace, "Courier New", monospace;
+    color-scheme: dark;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--drone);
+    font-family: var(--font-arcade);
+    padding-inline: 16px;
+    padding-block: 12px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    overflow: hidden;
+    touch-action: manipulation;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .screen {
+    --ctrl: 0px;
+    width: min(100%, calc((100dvh - 24px - 44px - var(--ctrl)) * 0.875));
+    aspect-ratio: 448 / 512;
+    max-width: 100%;
+    flex: none;
+    position: relative;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    background: var(--screen);
+    border-radius: 6px;
+    box-shadow: 0 0 0 1px #1c1a24, 0 0 60px rgba(255, 140, 120, .08);
+    outline: none;
+  }
+  canvas:focus-visible { box-shadow: 0 0 0 2px var(--cannon); }
+  .bar {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    justify-content: space-between;
+    width: min(100%, 448px);
+    font-size: 8px;
+    line-height: 1.6;
+    color: var(--dim);
+    letter-spacing: .04em;
+  }
+  .bar p { margin: 0; min-width: 0; }
+  .mute {
+    font: inherit;
+    color: var(--drone);
+    background: var(--pad);
+    border: 1px solid var(--pad-edge);
+    border-radius: 4px;
+    padding: 6px 8px;
+    cursor: pointer;
+    flex: none;
+  }
+  .mute:focus-visible { outline: 2px solid var(--cannon); outline-offset: 2px; }
+  .pad {
+    display: none;
+    width: min(100%, 448px);
+    grid-template-columns: 1fr 1fr 1.4fr;
+    gap: 10px;
+  }
+  .pad button {
+    font: inherit;
+    font-size: 14px;
+    color: var(--cannon);
+    background: var(--pad);
+    border: 1px solid var(--pad-edge);
+    border-radius: 10px;
+    height: 72px;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .pad button.fire { color: var(--ufo); }
+  .pad button.arrow { font-family: system-ui, sans-serif; font-size: 28px; }
+  .pad button.on { background: var(--pad-edge); }
+  @media (pointer: coarse) {
+    .pad { display: grid; }
+    .screen { --ctrl: 92px; }
+    .keys { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="screen"><canvas id="game" width="896" height="1024" tabindex="0" aria-label="Juego Space Invaders con drones"></canvas></div>
+<div class="pad" id="pad">
+  <button type="button" id="btn-left" class="arrow" aria-label="Mover a la izquierda">◀</button>
+  <button type="button" id="btn-right" class="arrow" aria-label="Mover a la derecha">▶</button>
+  <button type="button" id="btn-fire" class="fire" aria-label="Disparar">FUEGO</button>
+</div>
+<div class="bar">
+  <p><span class="keys">FLECHAS mover · ESPACIO disparar · P pausa<br></span>Parodia no oficial. Sin relación con Sancor Seguros.</p>
+  <button type="button" class="mute" id="mute" aria-pressed="false">SONIDO ON</button>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const W = 448, H = 512, S = 2;
+  const cv = document.getElementById('game');
+  const ctx = cv.getContext('2d');
+  ctx.scale(S, S);
+  ctx.imageSmoothingEnabled = false;
+  const FONT = '"Press Start 2P", ui-monospace, monospace';
+  const C = { drone: '#ffd9cf', glow: 'rgba(255,150,130,.95)', ufo: '#ff3b3b', cannon: '#3cff5a', white: '#f4f0ff', dim: '#8a8392' };
+  const GOLD = { light: '#ffe58a', mid: '#f5c22b', dark: '#c98a00' };
+
+  // ---------- Drone-dot shapes ----------
+  const GLYPHS = {
+    S: ['.###.', '#...#', '#....', '.###.', '....#', '#...#', '.###.'],
+    A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+    N: ['#...#', '##..#', '##..#', '#.#.#', '#..##', '#..##', '#...#'],
+    C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+    O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+    R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+    E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+    G: ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.###.'],
+    U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  };
+  const SW = 24, SH = 28; // base glyph box (logical px at scale 1)
+
+  // all dot lists are in logical px, already scaled
+  function glyphDots(ch, sc = 1) {
+    const d = [];
+    GLYPHS[ch].forEach((row, y) => [...row].forEach((c, x) => { if (c === '#') d.push([(4 + x * 4) * sc, (2 + y * 4) * sc]); }));
+    return d;
+  }
+  function lineDots(d, x1, y1, x2, y2, gap) {
+    const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / gap));
+    for (let i = 0; i <= n; i++) d.push([x1 + (x2 - x1) * i / n, y1 + (y2 - y1) * i / n]);
+  }
+  function logoDots(sc = 1, gap = 4) {
+    // A loose take on the round emblem from the drone show: ring, two triangles, a crossing line.
+    const d = [], cx = 12 * sc, cy = 14 * sc, r = 11 * sc;
+    const n = Math.round(Math.PI * 2 * r / gap);
+    for (let i = 0; i < n; i++) { const a = i / n * Math.PI * 2; d.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); }
+    const L = (a, b, c, e, g = gap) => lineDots(d, a * sc, b * sc, c * sc, e * sc, g);
+    L(8, 5, 8, 11); L(8, 5, 15, 9); L(8, 11, 15, 9);
+    L(4, 15.5, 20, 13, gap * 1.05);
+    L(10, 18, 16, 18); L(10, 18, 14, 23); L(16, 18, 14, 23);
+    // drop near-duplicates where lines meet
+    return d.filter((p, i) => !d.slice(0, i).some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) < gap * .55));
+  }
+  const hash = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
+  // every drone drifts a little on the second march frame, like it is holding position in the wind
+  const jitter = (i, x, y) => [(hash(i, x) - .5) * 1.6, (hash(y, i) - .5) * 1.6];
+
+  function makeSprite(dots, frame, color, glow, w, h, r = 1.35) {
+    const pad = 4, cw = Math.ceil(w + pad * 2), ch = Math.ceil(h + pad * 2);
+    const c = document.createElement('canvas'); c.width = cw * S; c.height = ch * S;
+    const g = c.getContext('2d'); g.scale(S, S);
+    g.fillStyle = color; g.shadowColor = glow; g.shadowBlur = 5;
+    dots.forEach(([x, y], i) => {
+      const [jx, jy] = frame ? jitter(i, x, y) : [0, 0];
+      g.beginPath(); g.arc(pad + x + jx, pad + y + jy, r, 0, Math.PI * 2); g.fill();
+    });
+    return { c, w: cw, h: ch, pad };
+  }
+  function makeDot(color, glow, r) {
+    const size = 14, c = document.createElement('canvas'); c.width = c.height = size * S;
+    const g = c.getContext('2d'); g.scale(S, S);
+    g.fillStyle = color; g.shadowColor = glow; g.shadowBlur = 5;
+    g.beginPath(); g.arc(size / 2, size / 2, r, 0, Math.PI * 2); g.fill();
+    return { c, size };
+  }
+  // 0: Sancor sign; 1-4: the portrait's warm face and cool hair/suit, each lit and shaded
+  const DOT_COL = [C.drone, '#ffc08a', '#f08a4a', '#eef2ff', '#8ea6ff'];
+  const DOTS = [makeDot(C.drone, C.glow, 1.7), makeDot(DOT_COL[1], 'rgba(255,140,60,.9)', 1.25), makeDot(DOT_COL[2], 'rgba(240,110,40,.9)', 1.2),
+    makeDot(DOT_COL[3], 'rgba(170,190,255,.9)', 1.25), makeDot(DOT_COL[4], 'rgba(110,140,255,.9)', 1.2)];
+
+  // small sprites for the title screen
+  const SPR = {};
+  for (const ch of [...Object.keys(GLYPHS), '@']) {
+    const dots = ch === '@' ? logoDots(1, 4) : glyphDots(ch);
+    SPR[ch] = [0, 1].map(f => makeSprite(dots, f, C.drone, C.glow, SW, SH));
+  }
+
+  // ---------- Mystery ship: the World Cup trophy ----------
+  // pixel art traced from the trophy photo
+  const TROPHY = [
+    '........hlnnllh.......',
+    '......lnkiiiknpnh.....',
+    '....hnmifgegfiknpl....',
+    '...hnmifgedgfjjkmpo...',
+    '...nmjjiffffikkimppl..',
+    '..kjijmmjijmmjifknpph.',
+    '.hkffinnkkmmkjfggknpo.',
+    '.kfgffmmmmpnmkggegnpph',
+    'ekggffknnnnpnkggegjnph',
+    'hifggmknnnnpnkfkgfifml',
+    'lifegnknppppppifgkpkkn',
+    'kifiknnnnppppnifimpkgn',
+    'kjfikmnkmpnnniiiinnjmn',
+    'gmffmmnjkmnnmkifinnfnl',
+    'hmiikmnmijjkjifinpkgph',
+    '.nkjimkniijkiffjpnfip.',
+    '.lmiiniknmnnjjnpnmfmh.',
+    '..miimifnpkfjnpnkiim..',
+    '..mniikfijifimnmkfim..',
+    '..nkffmiiifgfijjfikn..',
+    '..ggfimkiijkjfifgjmn..',
+    '..gkiimmijnjkffgfkmn..',
+    '...mmjknifnkfiggjknl..',
+    '...hnmjmifffffekjmnh..',
+    '....kjinkffgfgijjmn...',
+    '.....minpkkkkgmijml...',
+    '.....kkkpppnikmikmh...',
+    '.....gmimnnnjkjijme...',
+    '.....gmifijkimkjjj....',
+    '.....gmijiiiinjijk....',
+    '.....gkiijmiinjiki....',
+    '.....gjjfijjinijmg....',
+    '.....ejkinnkjnjjmh....',
+    '......ikkmnminjjm.....',
+    '......jiijjminkkn.....',
+    '......kjfjmnknkml.....',
+    '......hjfinpmmkn......',
+    '......eiijnpmmml......',
+    '.......iimnnjmnh......',
+    '......eijmnmjmn.......',
+    '......gimjmkkkm.......',
+    '......gjkimkjjm.......',
+    '......fjiijkiime......',
+    '......fjfinjiikh......',
+    '......iiinmjfijg......',
+    '......iinkmkffin......',
+    '......inmfkiffmn......',
+    '.....emmfimfgkmnh.....',
+    '.....gmiimnfggkml.....',
+    '.....kjikkniggjkn.....',
+    '....emfffkkfgginnh....',
+    '....lmggfjifgeinpq....',
+    '....rrqqrqqqqqqrrr....',
+    '...qrqqrrrrrqqqrrrq...',
+    '...lqqqrrrrrqqqrrrl...',
+    '..hmiggknlllhhgfnpnh..',
+    '..kmigiknkknfggfmppl..',
+    '.emkfgfmnmnkiggikmpne.',
+    '.qnigffkmkmifggfimnpq.',
+    '.qrrqqlppnpnlhqqrrrrq.',
+    'qrrqqqrrrrrrrqqqrrrrrq',
+    'hprqqqrrrrrrrqqqrrrrqh',
+    '.gighllqrrrqqqqqlnnmg.',
+    '...eggfikkkjfggggh....'];
+  const TROPHY_COL = {'d': '#fef6db', 'e': '#f6eac8', 'f': '#f0aa1d', 'g': '#e1ae48', 'h': '#a8a673', 'i': '#dd8507', 'j': '#d37502', 'k': '#c17109', 'l': '#867336', 'm': '#af5d05', 'n': '#a04d02', 'o': '#504e24', 'p': '#542f0b', 'q': '#2fb58c', 'r': '#126e55'};
+  const GREEN_PX = 'qr', GLINT = '#fff3c4', CUP_GOLD = '#f0aa1d';
+  const UFO_PX = 1, UFO_W = TROPHY[0].length * UFO_PX, UFO_H = TROPHY.length * UFO_PX;
+  const UFO_DOTS = [];
+  TROPHY.forEach((r, y) => [...r].forEach((ch, x) => { if (ch !== '.' && (x + y) % 2 === 0) UFO_DOTS.push([x * UFO_PX, y * UFO_PX]); }));
+  const UFO_SPR = [0, 1].map(f => {
+    const pad = 4, w = UFO_W + pad * 2, h = UFO_H + pad * 2;
+    const c = document.createElement('canvas'); c.width = w * S; c.height = h * S;
+    const g = c.getContext('2d'); g.scale(S, S);
+    g.shadowColor = 'rgba(255,190,60,.7)'; g.shadowBlur = f ? 6 : 3;
+    TROPHY.forEach((r, y) => [...r].forEach((ch, x) => {
+      if (ch === '.') return;
+      // second frame: a glint travels across the cup
+      g.fillStyle = f && !GREEN_PX.includes(ch) && (x * 3 + y) % 11 === 0 ? GLINT : TROPHY_COL[ch];
+      g.fillRect(pad + x * UFO_PX, pad + y * UFO_PX, UFO_PX, UFO_PX);
+    }));
+    return { c, w, h, pad };
+  });
+
+  // ---------- The sign: one big drone formation, like the photo ----------
+  const LS = 1.35, LOGO_S = 2.85, PITCH = 34, LINE2 = 46, TEXT_X = 76, TILT = .11;
+  function buildSancor() {
+    const items = [];
+    const add = (ch, x, y, sc, pts, kind) => {
+      const raw = ch === '@' ? logoDots(sc, 5.6) : glyphDots(ch, sc);
+      const dots = raw.map(([dx, dy], i) => ({ x: x + dx, y: y + dy - (x + dx) * TILT, alive: true, i, c: 0 }));
+      items.push({ ch, kind, pts, dots, total: dots.length, alive: true, hits: kind === 'logo' ? 5 : 3,
+        col: kind === 'logo' ? -1 : Math.round((x - TEXT_X) / PITCH), row: kind === 'bottom' ? 1 : 0 });
+    };
+    add('@', 0, 4, LOGO_S, 150, 'logo');
+    [...'SANCOR'].forEach((ch, i) => add(ch, TEXT_X + i * PITCH, 0, LS, 30, 'top'));
+    [...'SEGUROS'].forEach((ch, i) => add(ch, TEXT_X + i * PITCH, LINE2, LS, 20, 'bottom'));
+    return items;
+  }
+
+  // ---------- Level 2: the drone portrait of "Chiqui" Tapia, traced dot by dot from the show ----------
+  // flat [x, y, colour, ...] in logical px
+  const TAPIA = [67.2,0.0,3,77.4,0.0,3,79.2,0.0,3,57.0,0.6,3,64.2,0.6,3,71.4,0.6,3,83.4,0.6,3,85.8,0.6,3,60.0,2.4,3,67.2,3.0,3,88.8,3.0,3,93.0,3.0,3,52.8,3.6,3,65.4,4.2,3,84.6,4.2,2,97.8,4.2,3,58.2,4.8,3,75.0,4.8,3,48.0,5.4,2,102.0,5.4,3,90.6,6.0,2,46.2,6.6,3,72.6,6.6,3,93.6,7.2,3,105.6,7.2,3,63.6,7.8,3,86.4,7.8,3,80.4,8.4,3,42.6,9.0,3,46.2,9.0,3,57.0,9.0,2,109.2,9.0,2,71.4,9.6,3,75.6,9.6,3,67.2,10.2,3,102.6,10.2,3,40.2,10.8,2,78.6,10.8,3,90.6,10.8,3,92.4,10.8,3,45.0,11.4,2,84.0,11.4,2,97.2,12.6,3,112.2,12.6,3,36.6,13.2,3,40.8,13.2,2,52.2,13.2,3,72.0,13.2,2,56.4,13.8,2,66.0,13.8,2,76.2,13.8,3,82.2,13.8,2,87.6,13.8,2,94.2,14.4,3,114.6,14.4,3,35.4,15.0,2,70.8,15.0,2,99.0,15.0,3,103.2,15.0,3,45.6,15.6,2,65.4,15.6,3,55.8,16.2,3,89.4,16.2,3,62.4,16.8,3,75.0,16.8,2,84.0,16.8,3,92.4,16.8,2,34.2,17.4,2,58.8,17.4,3,68.4,17.4,2,70.8,17.4,2,79.8,17.4,2,87.6,17.4,2,96.0,17.4,3,36.6,18.0,3,57.0,18.0,2,64.8,18.0,3,76.8,18.0,3,90.6,18.0,2,110.4,18.0,3,117.0,18.0,3,47.4,18.6,2,53.4,18.6,3,107.4,18.6,2,51.6,19.2,3,87.0,19.2,2,96.0,19.2,2,35.4,19.8,3,72.0,19.8,2,82.8,19.8,2,89.4,19.8,3,114.0,19.8,3,33.0,20.4,2,37.8,20.4,3,77.4,20.4,3,85.2,20.4,3,91.8,20.4,3,94.2,20.4,2,42.6,21.0,3,45.6,21.0,2,118.8,21.0,2,39.6,21.6,3,62.4,21.6,1,87.6,21.6,2,98.4,21.6,2,55.8,22.2,3,96.0,22.2,3,115.8,22.8,2,43.2,23.4,3,52.2,23.4,2,61.8,23.4,1,103.2,23.4,3,32.4,24.0,2,40.2,24.0,3,58.8,24.0,3,67.2,24.0,3,71.4,24.0,1,79.8,24.0,1,48.6,24.6,3,73.2,24.6,0,76.8,24.6,1,84.0,24.6,1,90.0,24.6,1,106.2,24.6,3,113.4,24.6,3,96.6,25.2,3,108.6,25.2,2,120.0,25.2,2,92.4,25.8,1,72.0,26.4,1,82.2,26.4,1,100.8,26.4,3,42.6,27.0,2,75.6,27.0,1,79.2,27.0,0,31.8,27.6,3,37.8,27.6,3,65.4,27.6,1,91.8,27.6,0,104.4,27.6,2,110.4,28.2,3,112.2,28.2,3,36.0,28.8,3,40.8,28.8,2,61.8,28.8,0,67.8,28.8,1,87.0,28.8,1,114.6,28.8,3,56.4,29.4,0,70.2,29.4,0,120.0,29.4,3,52.8,30.0,0,74.4,30.0,1,83.4,30.0,0,96.0,30.0,0,110.4,30.0,3,49.2,30.6,0,77.4,30.6,1,103.2,30.6,1,34.8,31.8,3,39.6,31.8,3,47.4,31.8,0,63.0,31.8,1,92.4,31.8,0,100.2,31.8,0,37.8,32.4,3,61.2,32.4,1,65.4,32.4,1,72.6,32.4,0,83.4,32.4,1,86.4,32.4,1,88.2,32.4,1,104.4,32.4,1,111.0,32.4,3,112.8,32.4,2,30.6,33.0,2,58.8,33.0,1,67.2,33.0,1,69.6,33.0,1,75.0,33.0,0,77.4,33.0,0,81.0,33.0,1,90.0,33.0,0,120.0,33.0,2,44.4,33.6,3,57.0,33.6,0,96.0,33.6,0,98.4,33.6,1,34.2,34.2,2,37.2,34.2,3,54.0,34.2,0,91.8,34.2,1,106.8,34.2,1,111.0,34.2,2,102.0,34.8,1,113.4,34.8,3,51.6,35.4,1,64.2,35.4,0,88.2,35.4,1,94.8,35.4,0,116.4,35.4,3,120.0,35.4,3,38.4,36.0,1,48.0,36.0,0,61.8,36.0,1,66.6,36.0,0,69.0,36.0,1,30.0,36.6,2,71.4,36.6,0,83.4,36.6,1,104.4,36.6,1,73.8,37.2,1,75.6,37.2,0,78.0,37.2,0,98.4,37.2,1,112.2,37.2,2,115.2,37.2,3,35.4,37.8,0,38.4,37.8,1,45.6,37.8,0,55.2,37.8,0,58.8,38.4,1,86.4,38.4,0,88.8,38.4,0,90.6,39.0,0,93.0,39.0,1,106.2,39.0,1,33.0,39.6,3,49.2,39.6,3,66.0,39.6,0,113.4,39.6,1,117.0,39.6,3,120.6,39.6,3,55.8,40.2,1,68.4,40.2,0,82.2,40.2,0,103.8,40.2,1,29.4,40.8,2,37.2,40.8,0,57.6,40.8,1,75.0,40.8,0,77.4,40.8,0,79.8,40.8,0,99.0,40.8,1,42.0,41.4,3,51.0,41.4,0,96.0,41.4,0,109.2,41.4,0,115.8,41.4,3,72.0,42.0,0,120.6,42.0,2,32.4,42.6,3,34.8,42.6,1,61.2,42.6,0,87.6,42.6,0,89.4,42.6,0,92.4,42.6,1,102.0,42.6,0,106.2,42.6,1,113.4,42.6,1,63.6,43.2,0,82.8,43.2,1,95.4,43.2,1,47.4,43.8,3,54.6,43.8,0,57.6,43.8,1,66.0,43.8,0,69.0,43.8,1,77.4,43.8,0,85.8,43.8,1,117.6,43.8,3,36.6,44.4,1,51.0,44.4,1,75.0,44.4,0,109.8,44.4,0,28.8,45.0,3,38.4,45.0,1,80.4,45.0,0,90.0,45.0,1,92.4,45.0,0,114.0,45.0,0,31.8,45.6,1,59.4,45.6,1,62.4,45.6,1,78.6,45.6,0,87.0,45.6,0,115.8,45.6,1,120.6,45.6,2,66.0,46.2,1,71.4,46.2,1,82.2,46.2,0,36.0,46.8,0,45.0,46.8,3,69.0,46.8,1,85.2,46.8,1,96.6,46.8,0,99.0,46.8,1,110.4,46.8,1,47.4,47.4,3,49.8,47.4,3,53.4,47.4,3,75.0,47.4,0,90.6,47.4,0,33.6,48.0,1,60.6,48.0,2,72.0,48.0,0,79.2,48.0,0,82.8,48.0,1,93.6,48.0,1,104.4,48.0,1,28.8,48.6,3,36.0,48.6,0,57.6,48.6,3,63.0,48.6,2,87.0,48.6,0,88.8,48.6,0,98.4,48.6,0,100.2,48.6,1,117.0,48.6,0,120.6,48.6,3,114.6,49.2,0,31.2,49.8,1,42.0,49.8,3,105.6,49.8,0,110.4,49.8,1,61.2,50.4,3,65.4,50.4,1,67.2,50.4,1,34.8,51.0,0,46.8,51.0,1,52.8,51.0,0,63.6,51.0,2,91.8,51.0,3,94.2,51.0,3,99.0,51.0,3,118.2,51.0,1,50.4,51.6,1,54.6,51.6,1,70.8,51.6,1,72.6,51.6,1,84.0,51.6,1,87.0,51.6,3,89.4,51.6,3,114.0,51.6,1,120.6,51.6,3,32.4,52.2,1,75.6,52.2,1,77.4,52.2,1,103.2,52.2,3,30.0,52.8,0,45.0,52.8,1,48.6,52.8,1,111.0,52.8,1,24.0,53.4,0,26.4,53.4,0,34.8,53.4,1,80.4,53.4,0,83.4,53.4,1,87.0,53.4,3,92.4,53.4,3,106.8,53.4,3,114.6,53.4,1,51.0,54.0,0,53.4,54.0,0,56.4,54.0,0,58.8,54.0,0,71.4,54.0,0,90.0,54.0,2,98.4,54.0,0,118.2,54.0,1,61.2,54.6,0,28.2,55.2,1,31.2,55.2,0,44.4,55.2,1,48.0,55.2,0,73.8,55.2,1,46.2,55.8,1,64.2,55.8,1,72.0,55.8,0,75.6,55.8,0,103.2,55.8,1,111.0,55.8,1,116.4,55.8,1,120.0,55.8,3,77.4,56.4,1,87.6,56.4,0,92.4,56.4,1,94.8,56.4,1,100.2,56.4,1,33.6,57.0,0,85.8,57.0,1,98.4,57.0,0,22.8,57.6,0,29.4,57.6,1,44.4,57.6,1,55.8,57.6,2,83.4,57.6,0,102.0,57.6,1,103.8,57.6,1,115.8,57.6,0,31.2,58.2,1,51.0,58.2,2,25.8,58.8,1,40.8,58.8,0,59.4,58.8,3,33.0,59.4,0,66.0,59.4,0,92.4,59.4,3,110.4,59.4,1,118.2,59.4,3,22.8,60.0,0,82.2,60.0,1,88.2,60.0,2,102.6,60.0,0,104.4,60.0,1,123.6,60.0,0,27.0,60.6,1,73.8,60.6,1,96.6,60.6,3,116.4,60.6,1,39.6,61.2,1,42.6,61.2,1,108.0,61.2,1,120.6,61.2,0,60.6,61.8,0,64.8,61.8,1,25.8,62.4,1,49.8,62.4,1,58.2,62.4,0,83.4,62.4,0,103.2,62.4,1,23.4,63.0,1,52.2,63.0,0,72.6,63.0,1,75.6,63.0,1,88.8,63.0,0,107.4,63.0,0,116.4,63.0,2,119.4,63.0,0,31.8,63.6,0,37.8,63.6,1,45.6,63.6,0,55.2,63.6,0,63.0,63.6,0,93.0,63.6,1,43.2,64.2,1,90.6,64.2,0,111.6,64.2,0,124.8,64.2,0,48.0,64.8,0,61.2,64.8,1,98.4,64.8,1,104.4,64.8,0,118.2,64.8,1,24.6,65.4,0,41.4,65.4,0,58.8,65.4,1,70.2,65.4,0,87.6,65.4,0,93.6,65.4,0,106.8,65.4,0,116.4,65.4,1,121.2,65.4,1,28.8,66.0,0,72.6,66.0,0,76.2,66.0,1,90.0,66.0,0,36.0,66.6,1,51.6,66.6,0,57.0,66.6,0,78.0,66.6,1,101.4,66.6,1,124.2,66.6,1,46.2,67.2,0,54.0,67.2,1,67.8,67.2,1,111.0,67.2,1,120.6,67.2,1,48.6,67.8,0,97.8,67.8,0,109.2,67.8,0,31.2,68.4,0,43.8,68.4,1,87.6,68.4,1,91.8,68.4,0,25.8,69.0,0,39.6,69.0,0,58.8,69.0,1,66.0,69.0,1,70.2,69.0,0,78.6,69.0,0,103.2,69.0,1,46.2,69.6,0,54.6,69.6,1,75.0,69.6,0,95.4,69.6,0,99.6,69.6,0,105.0,69.6,0,119.4,69.6,1,123.0,69.6,1,41.4,70.2,1,49.8,70.2,0,60.6,70.2,1,68.4,70.2,1,72.0,70.2,0,81.0,70.2,1,111.0,70.2,1,27.0,70.8,1,34.8,70.8,1,52.8,70.8,1,58.8,70.8,0,65.4,70.8,1,76.8,70.8,1,88.8,70.8,0,43.2,71.4,1,79.2,71.4,1,87.0,71.4,1,90.6,71.4,1,97.8,71.4,0,99.6,71.4,1,25.2,72.0,0,30.0,72.0,1,40.2,72.0,1,48.0,72.0,0,51.0,72.0,0,70.2,72.0,0,121.2,72.0,1,52.8,72.6,0,57.6,72.6,1,73.2,72.6,0,75.0,72.6,0,81.0,72.6,1,101.4,72.6,0,104.4,72.6,0,107.4,72.6,0,67.2,73.2,0,89.4,73.2,0,93.6,73.2,0,112.2,73.2,0,46.2,73.8,1,55.2,73.8,0,91.2,73.8,0,117.6,73.8,0,25.8,74.4,1,57.0,74.4,0,62.4,74.4,0,70.8,74.4,0,72.6,74.4,1,79.8,74.4,1,96.0,74.4,0,104.4,74.4,1,36.0,75.0,1,44.4,75.0,0,48.6,75.0,0,98.4,75.0,1,100.2,75.0,1,29.4,75.6,1,64.8,75.6,0,69.0,75.6,1,75.6,75.6,0,77.4,75.6,1,91.8,75.6,0,50.4,76.2,1,82.2,76.2,1,84.6,76.2,0,118.8,76.2,0,42.0,76.8,1,45.6,76.8,0,52.2,76.8,0,55.2,76.8,0,58.8,76.8,0,63.0,76.8,1,106.2,76.8,1,34.8,77.4,0,71.4,77.4,1,74.4,77.4,0,97.8,77.4,1,111.6,77.4,1,28.2,78.0,1,48.6,78.0,1,84.0,78.0,0,95.4,78.0,0,118.2,78.0,0,37.2,78.6,1,87.6,78.6,0,92.4,78.6,0,101.4,78.6,0,120.0,78.6,0,24.6,79.2,0,43.8,79.2,0,51.0,79.2,0,53.4,79.2,0,57.0,79.2,1,103.8,79.2,0,27.6,79.8,1,46.2,79.8,1,96.0,79.8,0,24.0,81.0,0,36.6,81.0,0,57.6,81.0,1,94.2,81.0,0,97.8,81.0,0,100.2,81.0,1,111.0,81.0,1,118.8,81.0,1,42.6,81.6,0,49.2,81.6,0,67.8,81.6,1,89.4,81.6,0,34.2,82.2,1,46.8,82.2,1,51.6,82.2,0,55.8,82.2,0,63.0,82.2,0,70.2,82.2,0,87.0,82.2,0,102.6,82.2,0,105.0,82.2,0,24.6,82.8,1,27.6,82.8,0,44.4,82.8,1,76.2,82.8,0,78.0,82.8,1,116.4,82.8,1,60.6,83.4,1,64.8,83.4,0,84.0,83.4,1,96.0,83.4,1,98.4,83.4,1,36.0,84.0,0,39.6,84.0,1,46.8,84.0,1,49.2,84.0,1,55.8,84.0,0,81.0,84.0,1,109.8,84.0,1,111.6,84.0,1,54.0,84.6,0,63.0,84.6,1,73.2,84.6,1,75.6,84.6,0,87.6,84.6,0,45.0,85.2,0,67.2,85.2,0,100.2,85.2,1,102.0,85.2,1,104.4,85.2,0,58.2,85.8,1,85.2,85.8,1,90.6,85.8,0,28.8,86.4,3,37.2,86.4,0,47.4,86.4,0,81.0,86.4,1,97.2,86.4,0,109.8,86.4,1,117.6,86.4,0,42.0,87.0,1,52.8,87.0,1,54.6,87.0,1,60.6,87.0,1,65.4,87.0,1,68.4,87.0,0,71.4,87.0,1,73.8,87.0,1,101.4,87.0,1,34.2,87.6,0,51.0,87.6,0,63.6,87.6,1,88.8,87.6,0,93.0,87.6,0,120.0,87.6,0,58.2,88.2,1,76.8,88.2,1,82.2,88.2,0,105.0,88.2,1,117.6,88.2,1,28.8,88.8,3,43.8,88.8,0,45.6,88.8,1,60.0,88.8,1,86.4,88.8,1,100.8,88.8,1,111.0,88.8,0,40.8,89.4,0,68.4,89.4,0,91.2,89.4,1,98.4,89.4,1,49.2,90.0,1,51.6,90.0,0,54.0,90.0,1,63.0,90.0,0,66.0,90.0,1,70.2,90.0,0,76.2,90.0,0,83.4,90.0,0,94.8,90.0,0,105.6,90.0,1,117.6,90.0,0,36.6,90.6,0,58.2,90.6,1,60.6,90.6,1,73.8,90.6,1,78.6,90.6,1,103.2,90.6,0,33.6,91.2,1,42.6,91.2,1,72.0,91.2,0,80.4,91.2,0,85.8,91.2,0,88.2,91.2,1,99.6,91.2,0,45.6,91.8,0,91.8,91.8,0,111.0,91.8,1,36.0,92.4,1,50.4,92.4,1,57.0,92.4,1,83.4,92.4,0,95.4,92.4,1,103.8,92.4,1,29.4,93.0,3,43.8,93.0,0,52.8,93.0,1,109.2,93.0,0,40.8,93.6,0,54.6,93.6,1,85.8,93.6,1,93.0,93.6,1,101.4,93.6,0,34.2,94.2,0,49.2,94.2,1,61.2,94.2,2,63.6,94.2,2,65.4,94.2,2,70.8,94.2,2,87.6,94.2,1,91.2,94.2,0,104.4,94.2,1,69.0,94.8,2,73.2,94.8,2,78.6,94.8,3,80.4,94.8,2,95.4,94.8,0,115.2,94.8,3,52.2,95.4,0,76.2,95.4,2,89.4,95.4,1,111.0,95.4,0,43.8,96.0,0,91.8,96.0,0,107.4,96.0,0,109.2,96.0,0,36.6,96.6,0,102.6,96.6,0,30.0,97.2,3,40.8,97.2,1,49.2,97.2,1,93.6,97.2,1,64.8,97.8,1,68.4,97.8,1,78.0,97.8,1,99.6,97.8,0,66.6,98.4,0,70.8,98.4,0,72.6,98.4,1,75.6,98.4,0,51.6,99.0,1,94.8,99.0,0,43.2,99.6,0,45.6,99.6,0,60.0,99.6,1,84.0,99.6,1,109.2,99.6,1,114.6,99.6,3,37.8,100.2,0,47.4,100.2,0,62.4,100.2,1,79.8,100.2,0,92.4,100.2,1,101.4,100.2,1,106.2,100.2,1,64.8,100.8,0,67.2,100.8,0,70.8,100.8,0,73.2,100.8,0,81.6,100.8,1,58.2,101.4,1,75.6,101.4,0,97.8,101.4,1,55.2,102.0,0,95.4,102.0,1,45.0,102.6,0,48.0,102.6,0,60.0,102.6,0,88.2,102.6,0,93.6,102.6,0,31.8,103.2,3,62.4,103.2,1,67.2,103.2,0,82.8,103.2,1,100.8,103.2,0,43.2,103.8,1,105.6,103.8,0,108.0,103.8,0,113.4,103.8,3,54.6,104.4,1,65.4,104.4,1,79.2,104.4,1,87.6,104.4,1,95.4,104.4,1,39.6,105.0,0,46.2,105.0,1,56.4,105.0,1,81.6,105.0,1,99.6,105.0,0,69.0,105.6,1,73.2,105.6,1,91.2,105.6,1,52.2,106.2,0,78.0,106.2,0,97.8,106.8,0,40.8,107.4,0,46.8,107.4,0,64.8,107.4,0,86.4,107.4,0,104.4,107.4,1,106.8,107.4,1,53.4,108.0,0,68.4,108.0,0,70.8,108.0,1,73.2,108.0,0,88.8,108.0,1,100.2,108.0,0,111.6,108.0,3,29.4,108.6,3,55.8,108.6,0,59.4,108.6,1,61.2,108.6,0,75.6,108.6,0,78.6,108.6,0,81.6,108.6,1,34.8,109.2,3,84.0,109.2,0,87.0,109.2,0,91.8,109.2,0,96.6,109.8,1,43.8,110.4,0,105.0,110.4,1,52.2,111.0,1,56.4,111.0,1,70.2,111.0,0,78.6,111.0,0,86.4,111.0,0,73.2,111.6,0,102.6,111.6,0,33.6,112.2,2,46.8,112.2,0,58.2,112.2,0,60.0,112.2,1,66.0,112.2,0,80.4,112.2,1,91.2,112.2,0,99.6,112.2,1,109.8,112.2,3,25.2,112.8,3,37.2,112.8,3,54.6,112.8,1,71.4,112.8,0,75.6,112.8,0,84.0,112.8,0,63.6,113.4,1,57.6,114.0,0,87.0,114.0,0,88.8,114.0,1,43.8,114.6,0,65.4,114.6,0,67.2,114.6,0,69.6,114.6,0,79.8,114.6,0,85.2,114.6,1,96.6,114.6,1,100.2,114.6,1,35.4,115.2,2,71.4,115.2,1,76.2,115.2,0,39.6,115.8,3,57.0,115.8,1,21.0,116.4,3,45.6,116.4,3,55.2,116.4,1,82.2,116.4,1,85.2,116.4,0,88.8,116.4,1,106.8,116.4,3,33.6,117.0,2,51.6,117.0,2,64.2,117.0,0,73.8,117.0,0,79.2,117.0,1,37.2,117.6,2,61.2,117.6,0,67.2,117.6,0,69.6,117.6,0,109.8,117.6,2,75.6,118.2,0,87.0,118.2,0,92.4,118.2,0,16.2,118.8,3,97.2,118.8,3,39.0,119.4,2,69.0,119.4,0,72.6,119.4,0,81.0,119.4,0,85.2,119.4,1,36.0,120.0,2,53.4,120.0,3,77.4,120.0,1,110.4,120.0,2,34.2,120.6,3,61.2,120.6,3,103.2,120.6,3,108.0,120.6,2,12.0,121.2,3,64.2,121.2,1,79.2,121.2,1,120.6,121.2,3,40.8,121.8,2,45.0,121.8,3,55.2,121.8,3,67.8,121.8,1,74.4,121.8,1,90.0,121.8,0,110.4,121.8,2,18.6,122.4,3,106.2,122.4,2,7.8,123.0,3,37.8,123.0,2,56.4,123.6,3,87.0,123.6,0,34.8,124.2,2,43.2,124.2,2,108.0,124.2,2,61.8,124.8,3,83.4,124.8,0,99.6,124.8,3,103.8,124.8,2,110.4,124.8,3,37.8,126.0,2,81.0,126.0,0,0.0,126.6,3,40.8,126.6,2,45.6,126.6,2,66.6,126.6,1,73.2,126.6,0,102.6,126.6,2,70.8,127.2,0,77.4,127.2,1,105.6,127.2,2,60.0,127.8,3,125.4,127.8,3,35.4,128.4,3,42.6,128.4,2,48.6,128.4,2,95.4,128.4,3,100.2,128.4,2,110.4,128.4,2,132.0,128.4,3,84.0,129.0,1,108.0,129.0,2,64.2,129.6,3,103.8,129.6,2,15.6,130.2,3,36.0,130.2,3,67.8,130.2,3,72.6,130.2,0,81.0,130.2,3,135.6,130.2,3,39.0,130.8,2,43.8,130.8,2,46.2,130.8,2,51.0,130.8,2,98.4,130.8,2,77.4,131.4,3,92.4,131.4,3,102.0,131.4,2,106.2,131.4,2,127.2,131.4,3,109.8,132.0,2,96.0,132.6,2,36.6,133.2,3,48.6,133.2,2,53.4,133.2,2,46.2,133.8,2,90.0,133.8,0,106.8,133.8,3,41.4,134.4,2,55.8,134.4,2,60.0,134.4,3,94.2,134.4,2,98.4,134.4,2,102.6,134.4,2,109.2,135.0,2,51.6,135.6,2,87.0,135.6,1,64.2,136.2,0,91.2,136.2,2,96.0,136.2,2,100.2,136.2,2,48.6,136.8,2,58.8,136.8,2,84.0,136.8,0,105.6,136.8,2,81.6,137.4,1,12.6,138.0,3,37.8,138.0,2,45.0,138.0,2,88.2,138.0,2,93.6,138.0,2,55.8,138.6,2,61.8,139.2,3,69.6,139.2,1,72.0,139.2,1,76.8,139.2,1,78.6,139.2,1,96.6,139.2,2,104.4,139.2,3,108.6,139.2,2,130.8,139.2,3,52.2,139.8,2,86.4,139.8,2,91.2,139.8,2,42.0,140.4,2,84.6,140.4,2,100.8,140.4,2,58.8,141.0,2,66.0,141.0,2,81.0,141.0,2,52.2,141.6,2,94.2,141.6,2,38.4,142.2,2,48.0,142.2,2,56.4,142.2,2,68.4,142.2,2,71.4,142.2,1,78.0,142.2,3,88.8,142.2,2,102.6,142.2,2,75.0,142.8,3,108.0,142.8,2,53.4,143.4,2,97.8,143.4,2,132.6,143.4,3,43.8,144.0,2,92.4,144.0,2,49.8,145.2,2,100.8,145.2,2,107.4,145.2,3,95.4,145.8,2,39.6,146.4,2,47.4,147.0,2,75.6,147.0,3,103.8,147.0,2,134.4,147.0,3,90.0,147.6,2,98.4,147.6,2,57.0,148.2,2,87.6,148.2,2,43.2,149.4,2,106.8,149.4,2,102.0,150.0,3,40.2,150.6,2,53.4,150.6,2,60.6,150.6,3,57.0,151.2,3,94.2,151.8,2,103.8,151.8,2,88.8,152.4,2,106.2,152.4,3,49.2,153.0,2,61.2,153.0,2,84.6,153.6,2,88.2,154.2,2,40.8,154.8,2,45.6,154.8,2,55.2,154.8,2,98.4,154.8,2,92.4,155.4,2,130.2,155.4,3,133.2,155.4,3,61.8,156.0,2,101.4,156.0,3,57.6,157.2,3,105.6,157.2,3,82.2,157.8,2,85.8,158.4,2,90.6,158.4,2,60.0,159.0,2,42.0,159.6,2,46.8,159.6,2,52.2,159.6,2,62.4,159.6,2,95.4,160.2,2,57.6,160.8,2,69.6,160.8,3,72.6,160.8,3,104.4,161.4,3,75.6,162.0,2,80.4,162.0,3,89.4,162.0,2,99.6,162.0,3,84.6,162.6,2,61.8,163.2,2,87.0,163.2,3,43.2,163.8,2,48.0,163.8,2,94.2,163.8,3,131.4,163.8,3,53.4,164.4,2,60.0,165.6,3,80.4,165.6,2,103.2,165.6,2,69.6,166.2,3,83.4,166.2,2,87.6,166.8,2,92.4,168.0,2,44.4,168.6,2,49.8,168.6,2,81.6,168.6,3,97.2,168.6,2,55.2,169.2,2,58.2,169.8,2,102.0,169.8,2,63.6,170.4,3,68.4,171.0,3,86.4,171.0,2,45.6,172.8,2,83.4,172.8,2,51.0,173.4,2,90.6,173.4,2,56.4,174.0,2,96.0,174.0,2,100.8,174.6,2,67.2,175.8,3,86.4,175.8,2,74.4,176.4,3,84.6,177.6,2,89.4,178.2,2,94.8,178.8,2,99.6,179.4,2];
+  const TILE = 18;
+  function buildTapia() {
+    const tiles = new Map();
+    for (let i = 0; i < TAPIA.length; i += 3) {
+      const x = TAPIA[i], y = TAPIA[i + 1], col = Math.floor(x / TILE), row = Math.floor(y / TILE), key = col + ',' + row;
+      if (!tiles.has(key)) tiles.set(key, { ch: 'T', kind: 'tile', dots: [], alive: true, hits: 1, col, row });
+      tiles.get(key).dots.push({ x, y, alive: true, i: i / 3, c: 1 + TAPIA[i + 2] });
+    }
+    return [...tiles.values()].map(tl => {
+      const warm = tl.dots.filter(d => d.c <= 2).length > tl.dots.length / 2;
+      return { ...tl, total: tl.dots.length, pts: warm ? 10 : 0 };
+    });
+  }
+  const LEVEL_NAME = lv => lv % 2 ? 'SANCOR SEGUROS' : 'EL CHIQUI';
+
+  // ---------- Pixel sprites (cannon) ----------
+  const CANNON = ['......#......', '.....###.....', '.....###.....', '.###########.', '#############', '#############', '#############', '#############'];
+  function pixelCanvas(rows, color, px) {
+    const c = document.createElement('canvas'); c.width = rows[0].length * px * S; c.height = rows.length * px * S;
+    const g = c.getContext('2d'); g.fillStyle = color;
+    rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch === '#') g.fillRect(x * px * S, y * px * S, px * S, px * S); }));
+    return c;
+  }
+  // celeste y blanco: white turret, flag bands on the body
+  const CELESTE = '#74acdf';
+  const CANNON_IMG = (() => {
+    const px = 2, c = document.createElement('canvas'); c.width = CANNON[0].length * px * S; c.height = CANNON.length * px * S;
+    const g = c.getContext('2d');
+    const band = y => y < 3 ? '#ffffff' : y === 3 || y === 4 ? CELESTE : y === 5 ? '#ffffff' : CELESTE;
+    CANNON.forEach((r, y) => [...r].forEach((ch, x) => {
+      if (ch !== '#') return;
+      g.fillStyle = y === 5 && x === 6 ? '#f6b40e' : band(y); // a little sun in the white band
+      g.fillRect(x * px * S, y * px * S, px * S, px * S);
+    }));
+    return c;
+  })();
+  const PW = 26, PH = 16, PY = 426, GROUND = 456;
+
+  // ---------- Three gold stars (one per World Cup) ----------
+  const SCELL = 2, SGW = 34, SGH = 32, STAR_Y = 352;
+  const STAR_MASK = (() => {
+    const cx = SGW * SCELL / 2, cy = 35, R = 33, r = 13.5;
+    const pts = [];
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5, rad = i % 2 ? r : R;
+      pts.push([cx + Math.cos(a) * rad, cy + Math.sin(a) * rad]);
+    }
+    const inside = (x, y) => {
+      let inn = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const [xi, yi] = pts[i], [xj, yj] = pts[j];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inn = !inn;
+      }
+      return inn;
+    };
+    // bevel: each arm has a lit half and a shaded half
+    return Array.from({ length: SGH }, (_, row) => Array.from({ length: SGW }, (_, col) => {
+      const x = col * SCELL + 1, y = row * SCELL + 1;
+      if (!inside(x, y)) return 0;
+      let a = Math.atan2(y - cy, x - cx) + Math.PI / 2;
+      a = ((a % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      const facet = Math.floor(a / (Math.PI / 5));
+      const edge = Math.hypot(x - cx, y - cy) < 4;
+      return edge ? 1 : (facet % 2 ? 2 : 1);
+    }));
+  })();
+  function newStar(cx) {
+    const c = document.createElement('canvas'); c.width = SGW * SCELL * S; c.height = SGH * SCELL * S;
+    return { x: Math.round(cx - SGW * SCELL / 2), y: STAR_Y, g: STAR_MASK.map(r => r.slice()), c, dirty: true };
+  }
+  function paintStar(st) {
+    const g = st.c.getContext('2d'), k = SCELL * S;
+    g.clearRect(0, 0, st.c.width, st.c.height);
+    for (let r = 0; r < SGH; r++) for (let c = 0; c < SGW; c++) {
+      const v = st.g[r][c]; if (!v) continue;
+      const exposed = !st.g[r - 1]?.[c] || !st.g[r]?.[c - 1];
+      g.fillStyle = exposed ? GOLD.light : v === 1 ? GOLD.mid : GOLD.dark;
+      g.fillRect(c * k, r * k, k, k);
+    }
+    st.dirty = false;
+  }
+
+  // ---------- Audio ----------
+  let ac = null, muted = false, ufoNode = null;
+  function audio() {
+    if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } }
+    if (ac && ac.state === 'suspended') ac.resume();
+    return ac;
+  }
+  function tone(freq, dur, type = 'square', vol = .12, slideTo = null) {
+    if (muted || !ac) return;
+    const t = ac.currentTime, o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + .02);
+  }
+  let noiseBuf = null;
+  function noise(dur, vol = .2, filterFreq = 2000, filterTo = null) {
+    if (muted || !ac) return;
+    if (!noiseBuf) {
+      noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const t = ac.currentTime, s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.setValueAtTime(filterFreq, t);
+    if (filterTo) f.frequency.exponentialRampToValueAtTime(filterTo, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    s.connect(f).connect(g).connect(ac.destination); s.start(t); s.stop(t + dur);
+  }
+  const MARCH = [98, 87, 78, 73];
+  const sfx = {
+    march: i => tone(MARCH[i % 4], .09, 'square', .16),
+    shoot: () => { tone(1200, .12, 'square', .05, 300); noise(.08, .05, 4000); },
+    hit: () => { noise(.1, .12, 2500, 500); },
+    kill: () => { noise(.22, .2, 3000, 250); tone(400, .14, 'square', .05, 80); },
+    ufoKill: () => { for (let i = 0; i < 6; i++) setTimeout(() => tone(900 - i * 90, .07, 'square', .07), i * 60); },
+    die: () => { noise(.9, .25, 1500, 60); tone(220, .8, 'sawtooth', .06, 40); },
+    extra: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, .12, 'square', .07), i * 90)),
+  };
+  function ufoSound(on) {
+    if (on && !ufoNode && !muted && ac) {
+      const o = ac.createOscillator(), lfo = ac.createOscillator(), lg = ac.createGain(), g = ac.createGain();
+      o.type = 'square'; o.frequency.value = 520; lfo.frequency.value = 7; lg.gain.value = 140; g.gain.value = .035;
+      lfo.connect(lg).connect(o.frequency); o.connect(g).connect(ac.destination); o.start(); lfo.start();
+      ufoNode = { o, lfo };
+    } else if (!on && ufoNode) {
+      try { ufoNode.o.stop(); ufoNode.lfo.stop(); } catch (e) {}
+      ufoNode = null;
+    }
+  }
+
+  // ---------- Storage ----------
+  let hi = 0;
+  try { hi = parseInt(localStorage.getItem('sancor-invaders-hi') || '0', 10) || 0; } catch (e) {}
+  const saveHi = () => { try { localStorage.setItem('sancor-invaders-hi', String(hi)); } catch (e) {} };
+
+  // ---------- Game state ----------
+  let state = 'title', stateT = 0, t = 0;
+  let score, lives, level, extraGiven;
+  let sign, totalDots = 1, ox, oy, dir, stepTimer, frame, marchIdx, dropNext;
+  let player, pShot, aShots, aShotTimer, stars, ufo, ufoTimer, shotsFired, particles = [], popups = [];
+  const keys = { left: false, right: false };
+  let firePressed = false;
+
+  function newGame() {
+    score = 0; lives = 3; level = 1; extraGiven = false; shotsFired = 0;
+    newWave();
+    state = 'playing'; stateT = 0;
+  }
+  function newWave() {
+    const tapia = level % 2 === 0;
+    sign = tapia ? buildTapia() : buildSancor();
+    totalDots = sign.reduce((n, a) => n + a.total, 0);
+    const maxX = Math.max(...sign.flatMap(a => a.dots.map(d => d.x)));
+    ox = Math.round((W - maxX) / 2);
+    oy = (tapia ? 104 : 136) + Math.min(Math.floor((level - 1) / 2), 4) * 12;
+    dir = 1; stepTimer = 0; frame = 0; marchIdx = 0; dropNext = false;
+    player = { x: W / 2 - PW / 2, dead: 0 };
+    pShot = null; aShots = []; aShotTimer = 80; particles = []; popups = [];
+    ufo = null; ufoTimer = 1500;
+    stars = [W / 4, W / 2, W * 3 / 4].map(newStar);
+  }
+  const liveDots = () => { const out = []; for (const a of sign) if (a.alive) for (const d of a.dots) if (d.alive) out.push(d); return out; };
+  const dotPos = (d) => frame ? [ox + d.x + jitter(d.i, d.x, d.y)[0], oy + d.y + jitter(d.i, d.x, d.y)[1]] : [ox + d.x, oy + d.y];
+
+  function addScore(n) {
+    score += n;
+    if (!extraGiven && score >= 1500) { extraGiven = true; lives++; sfx.extra(); }
+    if (score > hi) { hi = score; saveHi(); }
+  }
+  function drop(x, y, color) {
+    particles.push({ x, y, vx: (Math.random() - .5) * 1.2, vy: -Math.random() * 1.2, life: 80 + Math.random() * 50, color });
+  }
+  function burst(dots, x, y, color) { dots.forEach(([dx, dy]) => drop(x + dx, y + dy, color)); }
+
+  // knock out the drones nearest the impact; a letter goes down after 3 hits, the emblem after 5
+  function hitSign(bx, by, by2) {
+    for (const a of sign) {
+      if (!a.alive) continue;
+      const touched = a.dots.some(d => d.alive && Math.abs(ox + d.x - bx) <= 4 && oy + d.y >= by - 3 && oy + d.y <= by2 + 3);
+      if (!touched) continue;
+      const k = Math.ceil(a.total / a.hits);
+      const near = a.dots.filter(d => d.alive).sort((p, q) => Math.hypot(ox + p.x - bx, oy + p.y - by) - Math.hypot(ox + q.x - bx, oy + q.y - by)).slice(0, k);
+      near.forEach(d => { d.alive = false; drop(ox + d.x, oy + d.y, DOT_COL[d.c]); });
+      addScore(10);
+      if (!a.dots.some(d => d.alive)) {
+        a.alive = false; addScore(a.pts); sfx.kill();
+        popups.push({ x: ox + a.dots[0].x, y: oy + a.dots[0].y, txt: String(a.pts + 10), life: 50, color: C.drone });
+      } else sfx.hit();
+      return true;
+    }
+    return false;
+  }
+
+  // ---------- Stars (shields) ----------
+  function starHit(x, y, w, h, eraseR) {
+    for (const st of stars) {
+      if (x + w < st.x || x > st.x + SGW * SCELL || y + h < st.y || y > st.y + SGH * SCELL) continue;
+      const c0 = Math.max(0, Math.floor((x - st.x) / SCELL)), c1 = Math.min(SGW - 1, Math.floor((x + w - st.x) / SCELL));
+      const r0 = Math.max(0, Math.floor((y - st.y) / SCELL)), r1 = Math.min(SGH - 1, Math.floor((y + h - st.y) / SCELL));
+      for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) if (st.g[r][c]) {
+        if (eraseR) erode(st, c, r, eraseR);
+        return true;
+      }
+    }
+    return false;
+  }
+  function erode(st, c, r, rad) {
+    for (let y = -rad; y <= rad; y++) for (let x = -rad; x <= rad; x++) {
+      const rr = r + y, cc = c + x;
+      if (rr < 0 || cc < 0 || rr >= SGH || cc >= SGW || !st.g[rr][cc]) continue;
+      const d = Math.hypot(x, y);
+      if (d <= rad - .5 || (d <= rad + .5 && Math.random() < .5)) {
+        st.g[rr][cc] = 0;
+        if (Math.random() < .25) drop(st.x + cc * SCELL, st.y + rr * SCELL, GOLD.mid);
+      }
+    }
+    st.dirty = true;
+  }
+  function signEatsStars(dots) {
+    for (const d of dots) {
+      const x = ox + d.x, y = oy + d.y;
+      for (const st of stars) {
+        if (x < st.x || x > st.x + SGW * SCELL || y < st.y - 2 || y > st.y + SGH * SCELL) continue;
+        const c = Math.floor((x - st.x) / SCELL), r = Math.floor((y - st.y) / SCELL);
+        for (let yy = -2; yy <= 2; yy++) for (let xx = -2; xx <= 2; xx++) {
+          if (st.g[r + yy]?.[c + xx]) { st.g[r + yy][c + xx] = 0; st.dirty = true; }
+        }
+      }
+    }
+  }
+
+  // ---------- Update ----------
+  function update() {
+    t++; stateT++;
+    updateParticles();
+    if (state !== 'playing') {
+      if (state === 'paused') { stateT--; t--; }
+      if (state === 'dying' && stateT > 110) {
+        if (lives <= 0) { state = 'gameover'; stateT = 0; ufoSound(false); }
+        else { player.x = W / 2 - PW / 2; player.dead = 0; aShots = []; state = 'playing'; stateT = 0; }
+      }
+      if (state === 'clear' && stateT > 110) { level++; newWave(); state = 'playing'; stateT = 0; }
+      return;
+    }
+
+    // player
+    if (keys.left) player.x -= 2.2;
+    if (keys.right) player.x += 2.2;
+    player.x = Math.max(16, Math.min(W - 16 - PW, player.x));
+    if (firePressed && !pShot) { pShot = { x: player.x + PW / 2 - 1, y: PY - 6 }; shotsFired++; sfx.shoot(); }
+    firePressed = false;
+
+    // player shot
+    if (pShot) {
+      const prevY = pShot.y;
+      pShot.y -= 8;
+      if (pShot.y < 40) { popups.push({ x: pShot.x - 6, y: 42, txt: '*', life: 14, color: C.white }); pShot = null; }
+      else if (starHit(pShot.x, pShot.y, 2, 8, 2)) pShot = null;
+      else if (hitSign(pShot.x + 1, pShot.y, prevY + 8)) pShot = null;
+      else if (ufo && pShot.y < ufo.y + UFO_H && pShot.y > ufo.y - 6 && pShot.x > ufo.x && pShot.x < ufo.x + UFO_W) {
+        // classic trick: the 23rd shot and every 15th after pays 300
+        const pts = (shotsFired === 23 || (shotsFired > 23 && (shotsFired - 23) % 15 === 0)) ? 300 : [50, 100, 150][Math.floor(Math.random() * 3)];
+        addScore(pts); sfx.ufoKill(); ufoSound(false);
+        burst(UFO_DOTS, ufo.x, ufo.y, CUP_GOLD);
+        popups.push({ x: ufo.x, y: ufo.y + 10, txt: String(pts), life: 90, color: GLINT });
+        ufo = null; pShot = null;
+      }
+    }
+    for (const a of aShots) if (pShot && Math.abs(a.x - pShot.x) < 4 && Math.abs(a.y - pShot.y) < 10) {
+      a.dead = true; popups.push({ x: a.x - 6, y: a.y, txt: '*', life: 10, color: C.white }); pShot = null;
+    }
+
+    // march: the fewer drones left, the faster the sign moves
+    const live = liveDots();
+    if (!live.length) { state = 'clear'; stateT = 0; ufoSound(false); ufo = null; return; }
+    const frac = live.length / totalDots;
+    const interval = Math.max(1, Math.round((1 + 41 * frac) * Math.pow(.93, level - 1)));
+    if (++stepTimer >= interval) {
+      stepTimer = 0; frame ^= 1; sfx.march(marchIdx++);
+      if (dropNext) { oy += 12; dir *= -1; dropNext = false; }
+      else {
+        ox += dir * (frac < .07 ? 8 : 5);
+        let minX = Infinity, maxX = -Infinity;
+        for (const d of live) { minX = Math.min(minX, ox + d.x); maxX = Math.max(maxX, ox + d.x); }
+        if ((dir > 0 && maxX >= W - 14) || (dir < 0 && minX <= 14)) dropNext = true;
+      }
+      signEatsStars(live);
+      if (Math.max(...live.map(d => oy + d.y)) >= PY) { lives = 0; killPlayer(); return; }
+    }
+
+    // sign fire: from the lowest drone of an uncovered letter, or the emblem
+    if (--aShotTimer <= 0 && aShots.length < 3) {
+      const shooters = sign.filter(a => a.alive && !sign.some(b => b.alive && b.col === a.col && b.row > a.row));
+      let a;
+      const center = s => { const ds = s.dots.filter(d => d.alive); return ox + ds.reduce((m, d) => m + d.x, 0) / ds.length; };
+      if (Math.random() < .45) {
+        const pc = player.x + PW / 2;
+        a = shooters.reduce((best, s) => Math.abs(center(s) - pc) < Math.abs(center(best) - pc) ? s : best);
+      } else a = shooters[Math.floor(Math.random() * shooters.length)];
+      const ds = a.dots.filter(d => d.alive);
+      const low = ds.reduce((m, d) => d.y > m.y ? d : m, ds[0]);
+      aShots.push({ x: a.kind === 'logo' ? ox + low.x : center(a), y: oy + low.y + 4, type: Math.floor(Math.random() * 3), speed: frac < .15 ? 3.2 : 2.2 });
+      aShotTimer = Math.max(18, 64 - level * 5 - Math.floor((1 - frac) * 30));
+    }
+    for (const s of aShots) {
+      if (s.dead) continue;
+      s.y += s.speed;
+      if (s.y > GROUND - 4) { s.dead = true; popups.push({ x: s.x - 6, y: GROUND - 10, txt: '*', life: 10, color: C.cannon }); continue; }
+      if (starHit(s.x - 1, s.y, 3, 8, 2)) { s.dead = true; continue; }
+      if (s.y + 8 > PY + 2 && s.y < PY + PH && s.x > player.x + 1 && s.x < player.x + PW - 1) { s.dead = true; killPlayer(); return; }
+    }
+    aShots = aShots.filter(s => !s.dead);
+
+    // ufo
+    if (ufo) {
+      ufo.x += ufo.dir * 1.3;
+      if (ufo.x < -40 || ufo.x > W + 10) { ufo = null; ufoSound(false); }
+    } else if (--ufoTimer <= 0) {
+      if (frac >= .2) { const d = Math.random() < .5 ? 1 : -1; ufo = { x: d > 0 ? -UFO_W - 4 : W + 4, y: 36, dir: d }; ufoSound(true); }
+      ufoTimer = 1300 + Math.random() * 600;
+    }
+  }
+  function killPlayer() {
+    lives--; state = 'dying'; stateT = 0; pShot = null; ufoSound(false); sfx.die();
+    const dots = [];
+    CANNON.forEach((r, y) => [...r].forEach((c, x) => { if (c === '#' && (x + y) % 2 === 0) dots.push([x * 2, y * 2]); }));
+    dots.forEach(([dx, dy]) => drop(player.x + dx, PY + dy, dy < 6 || dy === 10 ? '#ffffff' : CELESTE));
+    player.dead = 1;
+  }
+  function updateParticles() {
+    for (const p of particles) { p.vy += .04; p.x += p.vx; p.y += p.vy; p.life--; }
+    particles = particles.filter(p => p.life > 0 && p.y < H);
+    for (const p of popups) p.life--;
+    popups = popups.filter(p => p.life > 0);
+  }
+
+  // ---------- Draw ----------
+  function text(str, x, y, color, size = 12, align = 'left') {
+    ctx.font = size + 'px ' + FONT; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'top';
+    ctx.fillText(str, x, y);
+  }
+  const pad4 = n => String(n).padStart(4, '0');
+  function drawSprite(sp, x, y, k = 1) { ctx.drawImage(sp.c, x - sp.pad * k, y - sp.pad * k, sp.w * k, sp.h * k); }
+  function drawStars() {
+    ctx.fillStyle = 'rgba(200,190,255,.35)';
+    for (let i = 0; i < 40; i++) {
+      const x = hash(i, 3) * W, y = 40 + hash(7, i) * 300;
+      if ((t / 40 + i) % 9 > 1) ctx.fillRect(x, y, .8, .8);
+    }
+  }
+  function drawHUD() {
+    text('SCORE<1>', 24, 10, C.white, 10);
+    text('HI-SCORE', W / 2, 10, C.white, 10, 'center');
+    text('NIVEL', W - 24, 10, C.white, 10, 'right');
+    text(pad4(score ?? 0), 44, 26, C.white, 10);
+    text(pad4(hi), W / 2, 26, C.white, 10, 'center');
+    text(String(level ?? 1).padStart(2, '0'), W - 24, 26, C.white, 10, 'right');
+    ctx.fillStyle = C.cannon; ctx.fillRect(12, GROUND, W - 24, 2);
+    const l = Math.max(0, lives ?? 3);
+    text(String(l), 24, GROUND + 14, C.white, 10);
+    for (let i = 0; i < Math.min(l - 1, 5); i++) ctx.drawImage(CANNON_IMG, 48 + i * 32, GROUND + 12, PW, PH);
+    text('CREDITO 01', W - 24, GROUND + 14, C.white, 10, 'right');
+  }
+  function drawBullet(s) {
+    ctx.fillStyle = C.white;
+    const k = Math.floor(s.y / 4) % 2;
+    if (s.type === 0) { for (let i = 0; i < 4; i++) ctx.fillRect(s.x - 1 + ((i + k) % 2 ? 1 : -1), s.y + i * 2, 2, 2); }
+    else if (s.type === 1) { ctx.fillRect(s.x - .5, s.y, 1.5, 8); ctx.fillRect(s.x - 2.5, s.y + (k ? 0 : 6), 5, 1.5); }
+    else { ctx.fillRect(s.x - .5, s.y, 1.5, 8); ctx.fillRect(s.x + (k ? -2 : 1), s.y + 3, 2, 1.5); }
+  }
+  function drawGoldStars() {
+    for (const st of stars) {
+      if (st.dirty) paintStar(st);
+      ctx.drawImage(st.c, st.x, st.y, SGW * SCELL, SGH * SCELL);
+    }
+  }
+  function drawSign() {
+    for (const a of sign) if (a.alive) for (const d of a.dots) if (d.alive) {
+      const [x, y] = dotPos(d), D = DOTS[d.c], h = D.size / 2;
+      ctx.drawImage(D.c, x - h, y - h, D.size, D.size);
+    }
+  }
+  function drawPlay() {
+    drawSign();
+    if (ufo) drawSprite(UFO_SPR[Math.floor(t / 10) % 2], ufo.x, ufo.y);
+    drawGoldStars();
+    if (!player.dead) ctx.drawImage(CANNON_IMG, player.x, PY, PW, PH);
+    else if (state === 'dying' && stateT < 60 && Math.floor(stateT / 6) % 2) {
+      ctx.globalAlpha = .6; ctx.drawImage(CANNON_IMG, player.x, PY, PW, PH); ctx.globalAlpha = 1;
+    }
+    if (pShot) { ctx.fillStyle = C.white; ctx.fillRect(pShot.x, pShot.y, 2, 8); }
+    aShots.forEach(drawBullet);
+  }
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = Math.min(1, p.life / 40);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 1.3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (const p of popups) text(p.txt, p.x, p.y, p.color, 10);
+  }
+  const TITLE_STARS = [W / 2 - 46, W / 2, W / 2 + 46];
+  function drawTitleStar(cx, cy, R) {
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? R * .41 : R;
+      ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+    }
+    ctx.closePath(); ctx.fillStyle = GOLD.mid; ctx.fill();
+  }
+  function drawTitle() {
+    const blink = Math.floor(t / 30) % 2 === 0;
+    text('SPACE', W / 2, 62, C.drone, 26, 'center');
+    text('INVADERS', W / 2, 98, C.drone, 26, 'center');
+    text('EDICION SHOW DE DRONES', W / 2, 138, C.ufo, 10, 'center');
+    [...'@SANCOR'].forEach((ch, i) => drawSprite(SPR[ch][Math.floor(t / 25 + i) % 2], 82 + i * 42, 166));
+    [...'SEGUROS'].forEach((ch, i) => drawSprite(SPR[ch][Math.floor(t / 25 + i + 1) % 2], 82 + i * 42, 202));
+    text('*TABLA DE PUNTOS*', W / 2, 244, C.white, 10, 'center');
+    drawSprite(UFO_SPR[Math.floor(t / 20) % 2], 122, 259, .58); text('= ? LA COPA', 160, 276, C.white, 10);
+    drawSprite(SPR['@'][0], 116, 306); text('= 150 EMBLEMA', 160, 316, C.white, 10);
+    drawSprite(SPR.S[0], 116, 338); text('= 30 SANCOR', 160, 348, C.white, 10);
+    drawSprite(SPR.E[0], 116, 370); text('= 20 SEGUROS', 160, 380, C.white, 10);
+    TITLE_STARS.forEach(x => drawTitleStar(x, 418, 11));
+    if (blink) text(matchMedia('(pointer: coarse)').matches ? 'TOCA PARA JUGAR' : 'ENTER PARA JUGAR', W / 2, 436, C.cannon, 10, 'center');
+  }
+  function draw() {
+    ctx.fillStyle = '#04040a'; ctx.fillRect(0, 0, W, H);
+    drawStars();
+    if (state === 'title') drawTitle();
+    else {
+      drawPlay();
+      if (state === 'gameover') {
+        ctx.fillStyle = 'rgba(4,4,10,.6)'; ctx.fillRect(0, 160, W, 140);
+        text('GAME OVER', W / 2, 190, C.ufo, 22, 'center');
+        text('PUNTAJE ' + pad4(score), W / 2, 230, C.white, 10, 'center');
+        if (Math.floor(t / 30) % 2 === 0) text(matchMedia('(pointer: coarse)').matches ? 'TOCA PARA SEGUIR' : 'ENTER PARA SEGUIR', W / 2, 264, C.cannon, 10, 'center');
+      }
+      if (state === 'paused') text('PAUSA', W / 2, 260, C.white, 18, 'center');
+      if (state === 'clear' && stateT > 20) {
+        text('NIVEL ' + level + ' SUPERADO', W / 2, 236, C.cannon, 12, 'center');
+        if (stateT > 50) text('SIGUE: ' + LEVEL_NAME(level + 1), W / 2, 260, C.white, 10, 'center');
+      }
+      if (state === 'playing' && stateT < 120 && lives > 0) {
+        text('NIVEL ' + level, W / 2, 300, C.white, 12, 'center');
+        text(LEVEL_NAME(level), W / 2, 322, level % 2 ? C.drone : DOT_COL[1], 10, 'center');
+      }
+    }
+    drawParticles();
+    drawHUD();
+  }
+
+  // ---------- Loop ----------
+  let last = performance.now(), acc = 0;
+  function loop(now) {
+    acc += Math.min(100, now - last); last = now;
+    while (acc >= 1000 / 60) { update(); acc -= 1000 / 60; }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- Input ----------
+  function primary() {
+    audio();
+    if (state === 'title' || (state === 'gameover' && stateT > 40)) newGame();
+  }
+  function togglePause() {
+    if (state === 'playing') { state = 'paused'; ufoSound(false); }
+    else if (state === 'paused') { state = 'playing'; if (ufo) ufoSound(true); }
+  }
+  window.addEventListener('keydown', e => {
+    const k = e.key;
+    if (['ArrowLeft', 'ArrowRight', ' ', 'ArrowUp', 'ArrowDown'].includes(k)) e.preventDefault();
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') keys.left = true;
+    if (k === 'ArrowRight' || k === 'd' || k === 'D') keys.right = true;
+    if (k === ' ' || k === 'ArrowUp' || k === 'w' || k === 'W') {
+      if (!e.repeat) { if (state === 'playing') firePressed = true; else primary(); }
+    }
+    if (k === 'Enter') primary();
+    if (k === 'p' || k === 'P' || k === 'Escape') togglePause();
+    if (k === 'm' || k === 'M') toggleMute();
+  });
+  window.addEventListener('keyup', e => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') keys.left = false;
+    if (k === 'ArrowRight' || k === 'd' || k === 'D') keys.right = false;
+  });
+  window.addEventListener('blur', () => { keys.left = keys.right = false; if (state === 'playing') togglePause(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && state === 'playing') togglePause(); });
+  cv.addEventListener('pointerdown', e => { e.preventDefault(); cv.focus(); if (state === 'paused') togglePause(); else primary(); });
+
+  function hold(id, on, off) {
+    const b = document.getElementById(id);
+    const down = e => { e.preventDefault(); b.classList.add('on'); try { b.setPointerCapture(e.pointerId); } catch (_) {} on(); };
+    const up = e => { e.preventDefault(); b.classList.remove('on'); off && off(); };
+    b.addEventListener('pointerdown', down);
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, up));
+    b.addEventListener('contextmenu', e => e.preventDefault());
+  }
+  hold('btn-left', () => { audio(); keys.left = true; }, () => { keys.left = false; });
+  hold('btn-right', () => { audio(); keys.right = true; }, () => { keys.right = false; });
+  hold('btn-fire', () => { if (state === 'playing') { audio(); firePressed = true; } else if (state === 'paused') togglePause(); else primary(); });
+
+  const muteBtn = document.getElementById('mute');
+  function toggleMute() {
+    muted = !muted;
+    muteBtn.textContent = muted ? 'SONIDO OFF' : 'SONIDO ON';
+    muteBtn.setAttribute('aria-pressed', String(muted));
+    if (muted) ufoSound(false); else if (ufo && state === 'playing') { audio(); ufoSound(true); }
+  }
+  muteBtn.addEventListener('click', () => { audio(); toggleMute(); muteBtn.blur(); });
+
+  const start = () => requestAnimationFrame(t0 => { last = t0; loop(t0); });
+  (document.fonts && document.fonts.load ? document.fonts.load('12px "Press Start 2P"').catch(() => {}) : Promise.resolve()).then(start);
+})();
+</script>
+</body>
+</html>
